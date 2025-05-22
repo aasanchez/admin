@@ -1,1 +1,1 @@
-# admin
+# Generic Admin Panel Template

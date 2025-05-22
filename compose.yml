@@ -1,0 +1,122 @@
+name: admin
+
+services:
+  postgres:
+    container_name: admin_db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_MULTIPLE_DATABASES: keycloack,gpiportal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    image: postgres:17.4-alpine
+    networks:
+      - gpi_network
+    ports:
+      - "54320:5432"
+    volumes:
+      - ./docker/volumes/postgres:/var/lib/postgresql/data
+      - ./docker/database-init.sh:/docker-entrypoint-initdb.d/database-init.sh
+
+  pgadmin4:
+    container_name: admin_pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${ADMIN_EMAIL:-admin@gpi.com}
+      PGADMIN_DEFAULT_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      PGADMIN_LISTEN_PORT: 8080
+    healthcheck:
+      test: ["CMD", "wget", "-O", "-", "http://localhost:8080/misc/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    image: dpage/pgadmin4:9.1
+    networks:
+      - gpi_network
+    restart: always
+    ports:
+      - "8910:8080"
+    volumes:
+      - ./docker/pgadmin.json:/pgadmin4/servers.json
+
+  keycloak:
+    build:
+      context: docker
+      dockerfile: keycloack.Dockerfile
+    container_name: admin_keycloak
+    command: start
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', '[ -f /tmp/HealthCheck.java ] || echo "public class HealthCheck { public static void main(String[] args) throws java.lang.Throwable { System.exit(java.net.HttpURLConnection.HTTP_OK == ((java.net.HttpURLConnection)new java.net.URL(args[0]).openConnection()).getResponseCode() ? 0 : 1); } }" > /tmp/HealthCheck.java && java /tmp/HealthCheck.java http://localhost:9000/health/live']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    environment:
+      KC_DB: postgres
+      KC_DB_USERNAME: ${POSTGRES_USER:-postgres}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      KC_DB_URL: jdbc:postgresql://postgres/keycloack
+      KC_HEALTH_ENABLED: true
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8080
+      KC_HOSTNAME_STRICT_BACKCHANNEL: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_HTTP_ENABLED: true
+      KC_METRICS_ENABLED: true
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+    networks:
+      - gpi_network
+    restart: always
+    ports:
+      - 8900:8080
+      - 8901:9000
+
+  redis:
+    container_name: admin_redis
+    image: redis:7.4.2
+    restart: always
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./docker/volumes/redis:/root/redis
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-admin}
+      - REDIS_PORT=6379
+      - REDIS_DATABASES=16
+    networks:
+      - gpi_network
+
+  ready2rock:
+    container_name: admin_ready
+    image: busybox:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgadmin4:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: /bin/sh -c "echo 'All services are healthy and running!'; sleep 60"
+    networks:
+      - gpi_network
+
+networks:
+  gpi_network:
+    driver: bridge
+    name: admin_network
